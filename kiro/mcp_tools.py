@@ -161,7 +161,13 @@ async def call_kiro_mcp_api(
             response = await client.post(mcp_url, json=mcp_request, headers=headers)
             
             if response.status_code != 200:
-                logger.error(f"MCP API error: {response.status_code}")
+                # Surface the response body so the real cause of a 4xx/5xx is visible
+                # (header/format/token-scope mismatch, moved endpoint, etc.)
+                body_preview = response.text[:1000] if response.text else "<empty body>"
+                logger.error(
+                    f"MCP API error: {response.status_code} "
+                    f"url={mcp_url} body={body_preview}"
+                )
                 return None, None
             
             mcp_response = response.json()
