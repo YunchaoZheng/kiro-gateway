@@ -170,12 +170,22 @@ async def call_kiro_mcp_api(
                 "Content-Type": "application/x-amz-json-1.0",
             }
         else:
+            from kiro.config import PROFILE_ARN
+
             headers = {
                 "Authorization": f"Bearer {token}",
                 "x-amzn-codewhisperer-optout": "false",
                 "Content-Type": "application/json",
             }
             mcp_url = f"{auth_manager.q_host}/mcp"
+            # runtime.kiro.dev/mcp rejects web_search with 400 "profileArn is required".
+            # The main GenerateAssistantResponse call to this SAME host supplies profileArn
+            # as a top-level body field (converters_core.py:1584 / routes_*), and that path
+            # works — so mirror it here rather than inventing a header. profileArn goes at
+            # the top level of the request, NOT inside params.
+            effective_profile_arn = profile_arn or PROFILE_ARN or ""
+            if effective_profile_arn:
+                mcp_request["profileArn"] = effective_profile_arn
 
         logger.debug(f"Calling MCP API: {mcp_url}")
         

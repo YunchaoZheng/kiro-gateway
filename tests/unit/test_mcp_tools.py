@@ -327,11 +327,15 @@ class TestMCPEndpointSelection:
         assert called_headers["Authorization"] == "Bearer test_access_token"
 
     @pytest.mark.asyncio
-    async def test_desktop_account_uses_q_host_without_profile_arn_header(self):
+    async def test_desktop_account_keeps_q_host_and_sends_profile_arn_in_body(self):
         """
         What it does: Verifies non-SSO (Kiro Desktop) accounts keep the q_host
-        endpoint and do NOT send the profile ARN header.
-        Purpose: Ensure the SSO-specific routing does not affect Desktop auth.
+        endpoint (runtime.kiro.dev) and supply the profile ARN as a top-level
+        request body field when a profile ARN is available.
+        Purpose: runtime.kiro.dev/mcp rejects web_search with
+        400 "profileArn is required". The main GenerateAssistantResponse call to
+        this same host passes profileArn at the top level of the body, so the MCP
+        call must do the same — without switching to the SSO-only Amazon Q host.
         """
         from kiro.auth import KiroAuthManager
         from datetime import datetime, timezone
@@ -350,11 +354,44 @@ class TestMCPEndpointSelection:
             await call_kiro_mcp_api("test query", manager)
 
         called_url = mock_post.call_args.args[0]
-        called_headers = mock_post.call_args.kwargs["headers"]
+        sent_body = mock_post.call_args.kwargs["json"]
+
+        # Endpoint stays on q_host (not the SSO-only Amazon Q host).
+        assert called_url == f"{manager.q_host}/mcp"
+        # profileArn is supplied at the top level of the body so runtime.kiro.dev
+        # accepts the call — mirroring the main API request path.
+        assert sent_body["profileArn"] == \
+            "arn:aws:codewhisperer:us-east-1:123456789012:profile/EXAMPLE"
+        # It must NOT be nested inside params.
+        assert "profileArn" not in sent_body.get("params", {})
+
+    @pytest.mark.asyncio
+    async def test_desktop_account_without_profile_arn_omits_body_field(self):
+        """
+        What it does: Verifies Kiro Desktop accounts with no profile ARN available
+        keep the q_host endpoint and do NOT add an empty profileArn body field.
+        Purpose: Ensure profileArn is only sent when it actually exists.
+        """
+        from kiro.auth import KiroAuthManager
+        from datetime import datetime, timezone
+
+        manager = KiroAuthManager(
+            refresh_token="test_refresh_token",
+            region="us-east-1",
+        )
+        manager._access_token = "test_access_token"
+        manager._expires_at = datetime.now(timezone.utc).replace(year=2099)
+
+        mock_client, mock_post = self._make_mock_client()
+        with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):
+            with patch("kiro.config.PROFILE_ARN", ""):
+                await call_kiro_mcp_api("test query", manager)
+
+        called_url = mock_post.call_args.args[0]
+        sent_body = mock_post.call_args.kwargs["json"]
 
         assert called_url == f"{manager.q_host}/mcp"
-        assert "x-amzn-kiro-profile-arn" not in called_headers
-        assert called_headers["Content-Type"] == "application/json"
+        assert "profileArn" not in sent_body
 
 
 # ==================================================================================================
